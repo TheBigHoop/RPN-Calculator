@@ -1,0 +1,116 @@
+#include "Stack.h"                                           // Include custom stack header
+#include <LiquidCrystal.h>                                   // Include LiquidCrystal library for LCD
+
+#define DURATION 300                                         // Key debounce duration in milliseconds
+
+const uint16_t thresholds[] = {                              // ADC thresholds for key detection
+  55, 58, 62, 66, 75, 81, 88, 97, 
+  116, 132, 152, 179, 255, 341, 512, 1024 
+};
+
+const char keys[] = {                                        // Key mapping based on thresholds
+  '+', 'E', '.', '0', '-', '3', '2', '1',
+  '*', '6', '5', '4', '/', '9', '8', '7' 
+};
+
+const int rs = 9, en = 8, d4 = 7, d5 = 6, d6 = 5, d7 = 4;     // LCD pin configuration
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);                   // Initialize LCD
+
+char currentInput[32];                                       // Buffer to store current input
+int inputIndex = 0;                                          // Index to track position in input buffer
+Stack stack;                                                 // Stack object for storing operands
+
+void setup() {
+  Serial.begin(9600);                                        // Start serial communication
+  lcd.begin(16, 2);                                          // Initialize 16x2 LCD
+  while (!Serial) ;                                          // Wait for serial to be ready
+  Splash();                                                  // Display splash screen
+}
+
+void Splash() {
+  lcd.setCursor(0, 0);                                       // Move cursor to first row
+  lcd.print("NPN CALC");                                     // Display "NPN CALC"
+}
+
+void loop() {
+  char key = grabKey();                                      // Get key press
+  if (key) processKey(key);                                  // Process if key is valid
+}
+
+char grabKey() {
+  static unsigned long lastKeyTime = 0;                      // Store last keypress time
+  uint16_t value = 0;                                        // Analog value from keypad
+
+  while ((value = analogRead(A5)) == 0) {}                   // Wait for keypress
+
+  if (millis() - lastKeyTime < DURATION) return '\0';        // Debounce check
+  delay(DURATION);                                           // Delay to avoid multiple reads
+
+  for (uint8_t i = 0; i < sizeof(thresholds) / sizeof(thresholds[0]); ++i) {
+    if (value <= thresholds[i]) {                            // Find which key was pressed
+      lastKeyTime = millis();                                // Update last keypress time
+      return keys[i];                                        // Return corresponding key
+    }
+  }
+
+  return '\0';                                               // Return null if no valid key
+}
+
+void processKey(char key) {
+  if (key == 'E') {                                          // 'E' key: enter or evaluate
+    if (inputIndex > 0) {                                    // If there's input
+      float val = atof(currentInput);                        // Convert to float
+      stack.push(val);                                       // Push to stack
+      clearInput();                                          // Clear input buffer
+    } else {
+      if (!stack.isEmpty()) {                                // If stack not empty
+        float result = stack.pop();                          // Pop value for display
+        if (stack.isEmpty()) {                               // If no more values in stack
+          lcd.clear();                                       // Clear LCD
+          lcd.setCursor(0, 1);                               // Move to second row
+          lcd.print("= ");                                   // Print equals sign
+          char buf[16];                                      // Buffer for float to string
+          dtostrf(result, 0, 6, buf);                        // Convert float to string
+          lcd.print(buf);                                    // Display result
+        } else {
+          stack.push(result);                                // Push back if not final result
+        }
+      }
+    }
+  } else if (key == '+' || key == '-' || key == '*' || key == '/') { // Arithmetic operation
+    if (inputIndex > 0) {                                    // If there's a number being entered
+      float val = atof(currentInput);                        // Convert and push
+      stack.push(val);
+      clearInput();
+    }
+    if (!stack.isEmpty()) {                                  // Check if enough operands
+      float b = stack.pop();
+      if (!stack.isEmpty()) {
+        float a = stack.pop();                               // Pop two values
+        float res = 0;                                       // Initialize result
+        switch (key) {                                       // Perform operation
+          case '+': res = a + b; break;
+          case '-': res = a - b; break;
+          case '*': res = a * b; break;
+          case '/': res = a / b; break;
+        }
+        stack.push(res);                                     // Push result to stack
+        lcd.setCursor(0, 1);                                 // Display result
+        lcd.print("= ");
+        char buf[16];
+        dtostrf(res, 0, 6, buf);                             // Format result
+        lcd.print(buf);
+      } else {
+        stack.push(b);                                       // Not enough values
+        lcd.setCursor(0, 1);
+        lcd.print("Need 2 vals");
+      }
+    } else {
+      lcd.setCursor(0, 1);                                   // Stack is empty
+      lcd.print("Stack Empty");
+    }
+  } else {                                                   // If it's a number or decimal
+    if (inputIndex < (int)sizeof(currentInput) - 1) {        // Check buffer size
+      currentInput[inputIndex++] = key;                      // Add key to buffer
+      currentInput[inputIndex] = '\0';                       // Null terminate string
+      lcd.setCursor(
